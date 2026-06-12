@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
+from torch.utils.checkpoint import checkpoint as _ckpt
 
 # from rgcn.layers import RGCNBlockLayer as RGCNLayer
 from rgcn.layers import UnionRGCNLayer, RGCNBlockLayer, RGAT, UnionRGCNLayer2, UnionRGATLayer, CompGCNLayer
@@ -365,28 +366,37 @@ class RecurrentRGCN(nn.Module):
         s_all = triples[:, 0].to(dev); rq_all = triples[:, 1].to(dev)
         Btot = triples.shape[0]
         outs = []
-        CH = 128 if N < 10000 else 8                       # chunk theo query -> chặn bộ nhớ (dataset lớn -> nhỏ lại)
+        CH = 64 if N < 10000 else 8                        # chunk theo query -> chặn bộ nhớ
         for st in range(0, Btot, CH):
             s = s_all[st:st + CH]; rq = rq_all[st:st + CH]
-            b = s.shape[0]; bidx = torch.arange(b, device=dev)
-            bd = self.path_boundary(R[rq])                 # [b, pd]
-            bd_full = torch.zeros(b, N, pdim, device=dev)  # boundary dạng [b,N,pd] (chỉ tại subject)
-            bd_full[bidx, s] = bd
-            H = bd_full
-            for l in range(self.path_L):
-                msg = H[:, u, :] * relw                    # [b, E, pd]
-                agg = torch.zeros(b, N, pdim, device=dev)
-                agg.index_add_(1, v, msg)                  # tổng tin về node đích
-                agg = agg / deg                            # chuẩn hóa bậc-vào
-                H = torch.relu(self.path_upd[l](torch.cat([agg, H], dim=-1)))
-                H = H + bd_full                            # tái bơm boundary (NBFNet, KHÔNG in-place)
-            if use_l2 and ent_emb is not None:
-                # (b) chấm điểm bằng QUERY CHUNG: q_path = W_q([ĥ_s ; hr_r]); S_path = q_path · H
-                q_path = self.path_q(torch.cat([ent_emb[s], R[rq]], dim=-1))  # [b, pd]
-                outs.append(torch.einsum('bp,bnp->bn', q_path, H))           # [b, N]
+            if self.training:
+                # gradient checkpointing: KHÔNG lưu H[b,N,pd], tính lại lúc backward -> tiết kiệm bộ nhớ
+                score = _ckpt(self._path_chunk, s, rq, R, relw, u, v, deg, ent_emb, use_reentrant=False)
             else:
-                outs.append(self.path_out(H).squeeze(-1))  # [b, N] (Mức 0/1: scorer riêng)
+                score = self._path_chunk(s, rq, R, relw, u, v, deg, ent_emb)
+            outs.append(score)
         return torch.cat(outs, dim=0)                      # [B, N]
+
+    def _path_chunk(self, s, rq, R, relw, u, v, deg, ent_emb):
+        """1 chunk lan truyền path + chấm điểm. Tách riêng để gradient-checkpoint."""
+        dev = R.device; N = self.num_ents; pdim = self.path_dim
+        b = s.shape[0]; bidx = torch.arange(b, device=dev)
+        bd = self.path_boundary(R[rq])                     # [b, pd]
+        bd_full = torch.zeros(b, N, pdim, device=dev)      # boundary [b,N,pd] (chỉ tại subject)
+        bd_full[bidx, s] = bd
+        H = bd_full
+        for l in range(self.path_L):
+            msg = H[:, u, :] * relw                        # [b, E, pd]
+            agg = torch.zeros(b, N, pdim, device=dev)
+            agg.index_add_(1, v, msg)                      # tổng tin về node đích
+            agg = agg / deg                                # chuẩn hóa bậc-vào
+            H = torch.relu(self.path_upd[l](torch.cat([agg, H], dim=-1)))
+            H = H + bd_full                                # tái bơm boundary (NBFNet)
+        if getattr(self, "path_level2", False) and ent_emb is not None:
+            # (b) chấm điểm bằng QUERY CHUNG: q_path = W_q([ĥ_s ; hr_r]); S_path = q_path · H
+            q_path = self.path_q(torch.cat([ent_emb[s], R[rq]], dim=-1))  # [b, pd]
+            return torch.einsum('bp,bnp->bn', q_path, H)                 # [b, N]
+        return self.path_out(H).squeeze(-1)                # [b, N] (Mức 0/1: scorer riêng)
 
     def _fuse_path(self, scores_ob, triples, t_idx, glist=None, ent_emb=None, rel_emb=None):
         # Kiến trúc hợp nhất: dùng Head B inline
