@@ -168,8 +168,13 @@ class RecurrentRGCN(nn.Module):
         self.path_upd = nn.ModuleList(
             [nn.Linear(self.path_dim * 2, self.path_dim) for _ in range(self.path_L)])
         self.path_out = nn.Linear(self.path_dim, 1)
-        print("[unified] inline path head ON (relation-only, inductive, dim=%d, L=%d)"
-              % (self.path_dim, self.path_L))
+        # === MỨC 2: hợp nhất sâu ===
+        #  (a) path dùng quan hệ ĐÃ tiến hóa hr (thay emb_rel tĩnh) cho boundary + message
+        #  (b) path chấm điểm bằng query dựng từ [h_s ; hr_r] của LogCL (thay path_out riêng)
+        self.path_level2 = True
+        self.path_q = nn.Linear(self.h_dim * 2, self.path_dim)   # query chung: [ĥ_s ; hr_r] -> path space
+        print("[unified] inline path head ON (dim=%d, L=%d) | LEVEL2=%s"
+              % (self.path_dim, self.path_L, self.path_level2))
 
         self.w1 = nn.Linear(self.h_dim*2, self.h_dim)
         
@@ -337,12 +342,16 @@ class RecurrentRGCN(nn.Module):
         return history_emb, static_emb, self.hr, his_emb, his_r_emb,his_temp_embs,his_rel_embs
 
 
-    def path_head_scores(self, triples, glist):
+    def path_head_scores(self, triples, glist, ent_emb=None, rel_emb=None):
         """Head B: query-conditioned message passing trên đồ thị lịch sử gần.
-        Khởi nhãn tại subject (boundary = hàm của quan hệ truy vấn), lan L hop theo cạnh,
-        message = h_u * W_rel(R[rel]). Chỉ dùng emb_rel CHUNG -> inductive. Trả [B, N] thô."""
+        MỨC 2: (a) dùng quan hệ ĐÃ tiến hóa hr (rel_emb) cho boundary+message;
+               (b) chấm điểm bằng query dựng từ [ĥ_s ; hr_r] của LogCL (thay path_out).
+        Trả [B, N] thô."""
         dev = self.emb_rel.device
-        R = F.normalize(self.emb_rel)                      # [2R, h_dim] chia sẻ với LogCL
+        use_l2 = getattr(self, "path_level2", False)
+        # (a) nguồn biểu diễn quan hệ: hr tiến hóa nếu có (Mức 2), ngược lại emb_rel tĩnh (Mức 1)
+        rel_src = rel_emb if (use_l2 and rel_emb is not None) else self.emb_rel
+        R = F.normalize(rel_src)                           # [2R, h_dim]
         relw_all = self.path_rel(R)                        # [2R, pd]
         # gộp cạnh từ các snapshot gần (đã ở trên GPU sau forward)
         us, vs, ers = [], [], []
@@ -371,15 +380,20 @@ class RecurrentRGCN(nn.Module):
                 agg = agg / deg                            # chuẩn hóa bậc-vào
                 H = torch.relu(self.path_upd[l](torch.cat([agg, H], dim=-1)))
                 H = H + bd_full                            # tái bơm boundary (NBFNet, KHÔNG in-place)
-            outs.append(self.path_out(H).squeeze(-1))      # [b, N]
+            if use_l2 and ent_emb is not None:
+                # (b) chấm điểm bằng QUERY CHUNG: q_path = W_q([ĥ_s ; hr_r]); S_path = q_path · H
+                q_path = self.path_q(torch.cat([ent_emb[s], R[rq]], dim=-1))  # [b, pd]
+                outs.append(torch.einsum('bp,bnp->bn', q_path, H))           # [b, N]
+            else:
+                outs.append(self.path_out(H).squeeze(-1))  # [b, N] (Mức 0/1: scorer riêng)
         return torch.cat(outs, dim=0)                      # [B, N]
 
-    def _fuse_path(self, scores_ob, triples, t_idx, glist=None):
+    def _fuse_path(self, scores_ob, triples, t_idx, glist=None, ent_emb=None, rel_emb=None):
         # Kiến trúc hợp nhất: dùng Head B inline
         if getattr(self, "use_unified_path", False):
             if glist is None or len(glist) == 0:
                 return scores_ob
-            pd = self.path_head_scores(triples, glist)              # [B, N] thô
+            pd = self.path_head_scores(triples, glist, ent_emb, rel_emb)   # [B, N] thô
             mu = pd.mean(1, keepdim=True); sd = pd.std(1, keepdim=True) + 1e-6
             pd = (pd - mu) / sd                                     # z-norm theo hàng (cùng thang S_embed)
             return scores_ob + self.path_gamma * pd
@@ -415,7 +429,7 @@ class RecurrentRGCN(nn.Module):
             if self.pre_type == "all":
 
                 scores_ob,_= self.decoder_ob.forward( embedding,r_emb, all_triples,  his_emb, self.pre_weight, self.pre_type)
-                scores_ob = self._fuse_path(scores_ob, all_triples, T_id, test_graph)
+                scores_ob = self._fuse_path(scores_ob, all_triples, T_id, test_graph, embedding, r_emb)
                 score_seq = F.softmax(scores_ob, dim=1)
                 score_en =score_seq
             scores_en = torch.log(score_en)
@@ -466,7 +480,7 @@ class RecurrentRGCN(nn.Module):
         if self.pre_type == "all":
             scores_ob, _= self.decoder_ob.forward(embedding, r_emb, all_triples, his_emb,self.pre_weight, self.pre_type)
             self.cur_split = 'train'
-            scores_ob = self._fuse_path(scores_ob, all_triples, T_idx, glist)
+            scores_ob = self._fuse_path(scores_ob, all_triples, T_idx, glist, embedding, r_emb)
             score_seq = F.softmax(scores_ob, dim=1)
             score_en = score_seq
 
