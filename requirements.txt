@@ -1,6 +1,18 @@
-torch
-torch_scatter
-numpy
+# ============================================================
+#  DEPTH — requirements   (Python 3.12, GPU CUDA 12.1)
+# ============================================================
+#
+#  !! Cài torch + torch-scatter TRƯỚC bằng 2 lệnh dưới (KHÔNG để pip tự build):
+#
+#    pip install torch==2.3.0 --index-url https://download.pytorch.org/whl/cu121
+#    pip install torch-scatter==2.1.2 -f https://data.pyg.org/whl/torch-2.3.0+cu121.html
+#
+#  Dự án dùng "dgl shim" (torch_scatter) ở UnifiedTKG/src/dgl -> KHÔNG cần cài dgl.
+#
+# ---- sau đó: pip install -r requirements.txt ----
+numpy==1.26.4
+pandas==2.2.3
 scipy
-tqdm
+tqdm==4.67.3
 loguru
+python-pptx==1.0.2     # chỉ cần nếu dựng slide bằng build_slides.py
