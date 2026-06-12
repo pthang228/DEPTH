@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Đường đi của một thực thể qua mô hình</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0;font-family:'Segoe UI',Arial,sans-serif;}
+  body{background:#0c1020;color:#e8eaf2;padding:18px;}
+  h1{text-align:center;font-size:21px;color:#fff;margin-bottom:2px;}
+  .sub{text-align:center;color:#9aa0c0;font-size:13px;margin-bottom:14px;}
+  .controls{text-align:center;margin-bottom:16px;}
+  button{background:#3b2f6b;color:#fff;border:1px solid #8a7bd8;border-radius:8px;
+    padding:9px 18px;font-size:14px;cursor:pointer;margin:0 5px;}
+  button:hover{background:#4a3d80;}
+  button.go{background:#2e6b3b;border-color:#5aa84a;}
+  .wrap{display:flex;gap:18px;max-width:1180px;margin:0 auto;}
+  .flow{flex:1;position:relative;}
+  .narr{width:330px;flex-shrink:0;background:#11152b;border:1px solid #2a3b5e;border-radius:12px;
+    padding:16px;position:sticky;top:10px;height:fit-content;}
+  .narr h3{color:#ffd9b0;font-size:15px;margin-bottom:8px;}
+  .narr .vec{font-family:'Consolas',monospace;font-size:12px;background:#0c1730;border:1px solid #2a3b5e;
+    border-radius:8px;padding:10px;margin:8px 0;min-height:54px;color:#86e1c0;white-space:pre-wrap;}
+  .narr .txt{font-size:13px;color:#cdd6f4;}
+  .narr .stepno{font-size:11px;color:#7f86a8;margin-top:8px;}
+  .stage{background:#0e1630;border:2px solid #2a3b5e;border-radius:11px;padding:12px 14px;margin:10px 0;
+    opacity:.4;transition:all .4s;}
+  .stage.b1{border-left:5px solid #3f7bd0;}
+  .stage.b2{border-left:5px solid #5aa84a;}
+  .stage.fz{border-left:5px solid #d68a4a;}
+  .stage.active{opacity:1;box-shadow:0 0 18px #6f7bff88;border-color:#8a9bff;transform:scale(1.015);}
+  .stage.done{opacity:.85;}
+  .stage .h{font-weight:600;font-size:14px;}
+  .stage .f{font-family:'Consolas',monospace;font-size:12px;color:#9fd0ff;margin-top:5px;}
+  .b2 .f{color:#a8e88a;}
+  .colhead{font-size:13px;font-weight:700;padding:6px 10px;border-radius:8px;display:inline-block;margin-top:6px;}
+  .h1c{background:#13243f;color:#7fb4ff;} .h2c{background:#1c2b1a;color:#9fe07f;}
+  .branches{display:flex;gap:14px;}
+  .branches>div{flex:1;}
+  /* the moving entity token */
+  #tok{position:absolute;width:46px;height:46px;border-radius:50%;
+    background:radial-gradient(circle,#ffe08a,#ff9a3c);box-shadow:0 0 20px #ffb95c;
+    display:flex;align-items:center;justify-content:center;font-weight:700;font-size:11px;color:#3a2400;
+    transition:top .6s ease,left .6s ease;z-index:50;pointer-events:none;}
+  .qbox{background:#3b2f6b;border:2px solid #8a7bd8;border-radius:10px;padding:10px;text-align:center;font-weight:600;}
+</style>
+</head>
+<body>
+  <h1>Đường đi của thực thể "USA" qua mô hình</h1>
+  <div class="sub">Query: (USA, Sanction, ?, t) — theo dõi vector của USA chạy qua 2 nhánh rồi hợp nhất</div>
+  <div class="controls">
+    <button class="go" onclick="play()">▶ Play</button>
+    <button onclick="step()">⏭ Bước tiếp</button>
+    <button onclick="reset()">⟲ Reset</button>
+  </div>
+
+  <div class="wrap">
+    <div class="flow" id="flow">
+      <div id="tok">USA</div>
+
+      <div class="stage qbox" id="s0">QUERY: (USA, Sanction, ?, t)</div>
+
+      <div class="branches">
+        <div>
+          <span class="colhead h1c">NHÁNH 1 · Embedding-Evolution</span>
+          <div class="stage b1" id="s1"><div class="h">① h_USA khởi tạo</div>
+            <div class="f">H₀[USA] ∈ ℝ²⁰⁰ (vector ngẫu nhiên)</div></div>
+          <div class="stage b1" id="s2"><div class="h">② RGCN — ngày t-7…t-1</div>
+            <div class="f">h_USA += Σ (h_neighbor + rel)·W</div></div>
+          <div class="stage b1" id="s3"><div class="h">③ GRU tiến hóa</div>
+            <div class="f">h_USA = GRU(agg, h_USA) mỗi ngày</div></div>
+          <div class="stage b1" id="s4"><div class="h">④ Global attn + hợp 2 view</div>
+            <div class="f">ĥ = λ·H_glob[USA]+(1-λ)·H_loc[USA]</div></div>
+          <div class="stage b1" id="s5"><div class="h">⑤ ConvTransE → điểm</div>
+            <div class="f">S_embed = q·H_localᵀ ∈ ℝ⁷¹²⁸</div></div>
+        </div>
+        <div>
+          <span class="colhead h2c">NHÁNH 2 · Path (CognTKE, đóng băng)</span>
+          <div class="stage b2" id="p1"><div class="h">① Dò đường từ USA</div>
+            <div class="f">USA →r₁→ China →r₂→ ? …</div></div>
+          <div class="stage b2" id="p2"><div class="h">② Message theo (quan hệ, thời gian)</div>
+            <div class="f">attn(r,t)·msg dọc đường</div></div>
+          <div class="stage b2" id="p3"><div class="h">③ Điểm path (thưa)</div>
+            <div class="f">S_path[o]≠0 chỉ nếu o trên đường</div></div>
+        </div>
+      </div>
+
+      <div class="stage fz" id="f1" style="margin-top:16px;"><div class="h">★ HỢP NHẤT</div>
+        <div class="f">S = S_embed + γ·z-norm(S_path), γ≈0.2</div></div>
+      <div class="stage fz" id="f2"><div class="h">⑥ softmax → xếp hạng object</div>
+        <div class="f">đáp án đúng (vd "China") lên top</div></div>
+    </div>
+
+    <div class="narr">
+      <h3 id="nh">Nhấn ▶ Play</h3>
+      <div class="vec" id="nv">h_USA = [ ? , ? , … ]  (chưa bắt đầu)</div>
+      <div class="txt" id="nt">Theo dõi vector của "USA" biến đổi qua từng khối, và cách hai nhánh cùng đẩy đáp án đúng lên đầu.</div>
+      <div class="stepno" id="ns"></div>
+    </div>
+  </div>
+
+<script>
+const steps = [
+ {id:'s0', h:'Query đến', v:'(USA, Sanction, ?, t)', t:'Cần dự đoán: USA sẽ "Sanction" ai tại thời điểm tương lai t? Bắt đầu tách 2 nhánh.'},
+ {id:'s1', h:'① Khởi tạo embedding', v:'h_USA = [0.12, -0.34, …]  (200 chiều)', t:'USA bắt đầu bằng 1 vector embedding học được (chưa mang lịch sử).'},
+ {id:'s2', h:'② RGCN gom hàng xóm', v:'h_USA ← Σ (h_China+r1, h_Iran+r2, …)·W', t:'Trong mỗi ngày quá khứ, USA nhận "tin nhắn" từ các thực thể nó từng tương tác (China, Iran…) qua quan hệ tương ứng. Vector USA hấp thụ ngữ cảnh cấu trúc.'},
+ {id:'s3', h:'③ GRU tiến hóa thời gian', v:'h_USA(t) = GRU( agg, h_USA(t-1) )', t:'Lặp qua 7 ngày: GRU cập nhật vector USA, "nhớ" diễn biến gần đây → embedding mang động lực thời gian.'},
+ {id:'s4', h:'④ Trộn global + local', v:'ĥ_USA = λ·H_global[USA] + (1-λ)·H_local[USA]', t:'Kết hợp góc nhìn toàn lịch sử (global) và gần đây (local). Contrastive (lúc train) đã ép 2 view này nhất quán.'},
+ {id:'s5', h:'⑤ ConvTransE chấm điểm', v:'S_embed = q·H_localᵀ → [7128 điểm]', t:'Từ (ĥ_USA, Sanction) tạo truy vấn q, chấm với MỌI thực thể → điểm dày đặc. Nhánh 1 xong.'},
+ {id:'p1', h:'② ⟶ Nhánh 2: dò đường', v:'USA →Sanction⁻¹→ China →Cooperate→ …', t:'Đồng thời, CognTKE truy hồi các đường quan hệ đa-hop trong lịch sử bắt đầu từ USA.'},
+ {id:'p2', h:'Message dọc đường', v:'attn(rel,Δt)·msg truyền theo path', t:'Tin truyền dọc các đường, có chú ý theo quan hệ và độ trễ thời gian → các thực thể "với tới được" nhận điểm.'},
+ {id:'p3', h:'③ Điểm path (thưa)', v:'S_path[China]=cao, hầu hết khác=0', t:'Chỉ các thực thể nằm trên đường bằng chứng có điểm. Đây là điểm precompute, đóng băng (đúng = CognTKE độc lập).'},
+ {id:'f1', h:'★ HỢP NHẤT 2 nhánh', v:'S = S_embed + 0.2·z-norm(S_path)', t:'Cộng có trọng số γ học được. "China" được CẢ embedding LẪN path ủng hộ → điểm cộng dồn mạnh.'},
+ {id:'f2', h:'⑥ Kết quả', v:'softmax → China hạng #1 ✓', t:'Đáp án đúng lên top. Vì 2 nhánh bù trừ lỗi cho nhau → MRR 0.514 (vượt cả hai nhánh đơn).'},
+];
+let i = -1, timer = null;
+function clearAll(){document.querySelectorAll('.stage').forEach(e=>{e.classList.remove('active');e.classList.remove('done');});}
+function show(k){
+  clearAll();
+  for(let j=0;j<=k;j++) document.getElementById(steps[j].id).classList.add('done');
+  const cur=document.getElementById(steps[k].id);
+  cur.classList.add('active');
+  // move token onto current stage
+  const tok=document.getElementById('tok'), flow=document.getElementById('flow');
+  const r=cur.getBoundingClientRect(), fr=flow.getBoundingClientRect();
+  tok.style.left=(r.right-fr.left-52)+'px';
+  tok.style.top=(r.top-fr.top+r.height/2-23)+'px';
+  // narration
+  document.getElementById('nh').textContent=steps[k].h;
+  document.getElementById('nv').textContent='h_USA = '+steps[k].v;
+  document.getElementById('nt').textContent=steps[k].t;
+  document.getElementById('ns').textContent='Bước '+(k+1)+'/'+steps.length;
+}
+function step(){ if(i<steps.length-1){ i++; show(i);} }
+function play(){ reset(); timer=setInterval(()=>{ if(i<steps.length-1){i++;show(i);} else {clearInterval(timer);} },1400); }
+function reset(){ if(timer)clearInterval(timer); i=-1; clearAll();
+  document.getElementById('nh').textContent='Nhấn ▶ Play';
+  document.getElementById('nv').textContent='h_USA = [ ? , ? , … ]';
+  document.getElementById('nt').textContent='Theo dõi vector "USA" biến đổi qua từng khối.';
+  document.getElementById('ns').textContent='';
+  const tok=document.getElementById('tok');tok.style.left='-100px';tok.style.top='0px';
+}
+window.onload=reset;
+</script>
+</body>
+</html>

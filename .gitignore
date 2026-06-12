@@ -1,0 +1,46 @@
+# ===== Dữ liệu & file nặng (KHÔNG đẩy lên GitHub) =====
+# datasets (gồm cả junction UnifiedTKG/data -> LogCL-main/data)
+data/
+**/data/
+*.zip
+
+# điểm path precompute (327MB)
+*.pkl
+*.pkl.bak
+*.bak
+
+# checkpoint mô hình
+*.pt
+**/models/
+**/result/
+**/results/
+
+# history subgraph
+*.npy
+**/his_graph_for/
+**/his_graph_inv/
+**/his_dict/
+
+# log chạy
+*.log
+*_depth.txt
+*_run*.txt
+icews*_depth.txt
+train_fusion.log
+fused_*.log
+unified_*.log
+
+# slide bản nháp có timestamp (giữ DEPTH_slides.pptx chính)
+DEPTH_slides_v*.pptx
+
+# python
+__pycache__/
+*.pyc
+*.pyo
+.ipynb_checkpoints/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
